@@ -8,6 +8,10 @@ const Model = require('./models/Model');
 const cloudinary = require('./cloudinaryConfig');
 const app = express();
 
+app.get('/ping', (req, res) => {
+  res.status(200).send('pong');
+});
+
 // Allow CORS and custom headers (x-api-key)
 app.use(cors({
   origin: true,
