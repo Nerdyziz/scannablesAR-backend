@@ -127,7 +127,16 @@ app.get('/api/models/:shortId', async (req, res) => {
     model.views = (model.views || 0) + 1;
     await model.save();
 
-    return res.json({ name: model.name, url: model.url, shortId: model.shortId, views: model.views });
+    // === FIX: INCLUDE 'info' IN THE RESPONSE ===
+    return res.json({ 
+      name: model.name, 
+      url: model.url, 
+      shortId: model.shortId, 
+      views: model.views,
+      info: model.info // <--- This was missing!
+    });
+    // ===========================================
+    
   } catch (err) {
     console.error('GET /api/models/:shortId error:', err);
     return res.status(500).json({ error: 'Server error' });
