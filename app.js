@@ -78,9 +78,17 @@ app.post('/api/upload', checkAdmin, (req, res) => {
     console.warn('No file URL found on req.file; saving will use fallback without extension.');
   }
 
+  const { infoTL, infoTR, infoBL, infoBR } = req.body;
+
   const model = new Model({
     name: req.file.originalname || 'unnamed',
-    url: fileUrl
+    url: fileUrl,
+    info: {
+        tl: infoTL || '',
+        tr: infoTR || '',
+        bl: infoBL || '',
+        br: infoBR || ''
+      }
   });
   await model.save();
 
