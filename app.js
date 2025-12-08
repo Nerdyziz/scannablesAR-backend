@@ -44,70 +44,74 @@ function checkAdmin(req, res, next) {
   return next();
 }
 
-// Upload route (admin only) — improved logging and robust responses
+// Update upload to handle fields
+const uploadFields = upload.fields([
+  { name: 'modelFile', maxCount: 1 }, 
+  { name: 'bgFile', maxCount: 1 }
+]);
+
 app.post('/api/upload', checkAdmin, (req, res) => {
-  // run multer middleware programmatically to capture multer errors
-  upload.single('modelFile')(req, res, async (err) => {
-    if (err) {
-      console.error('Upload middleware error:', err);
-      // Multer errors usually include message; return JSON
-      return res.status(400).json({ error: 'Upload middleware error', details: err.message || String(err) });
-    }
+  uploadFields(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: 'Upload error', details: err.message });
 
     try {
-      // Log presence of file
-      if (!req.file) {
-        console.warn('Upload request missing req.file; check form field name is "modelFile"');
-        return res.status(400).json({ error: 'No file uploaded. Ensure form field name is "modelFile".' });
+      if (!req.files || !req.files.modelFile) {
+        return res.status(400).json({ error: 'Model file is required' });
       }
 
-      // Log entire req.file keys for debugging
-      console.log('req.file keys:', Object.keys(req.file));
-      console.log('req.file summary:', {
-        originalname: req.file.originalname,
-        mimetype: req.file.mimetype,
-        size: req.file.size,
-        path: req.file.path || req.file.secure_url || req.file.url || null,
-        public_id: req.file.public_id || req.file.filename || null
+      // Get paths
+      const modelUrl = req.files.modelFile[0].path || req.files.modelFile[0].secure_url;
+      let bgUrl = '';
+      if (req.files.bgFile) {
+        bgUrl = req.files.bgFile[0].path || req.files.bgFile[0].secure_url;
+      }
+
+      const { name, qty, sold } = req.body;
+
+      const model = new Model({
+        name: name || req.files.modelFile[0].originalname,
+        url: modelUrl,
+        bgUrl: bgUrl,
+        qty: qty || 100,
+        sold: sold || 0
       });
-// === Build proper Cloudinary URL WITH EXTENSION (.glb / .gltf) ===
-  // prefer the path provided by multer-storage-cloudinary
-  const fileUrl = req.file.path || req.file.secure_url || req.file.url || null;
 
-  if (!fileUrl) {
-    console.warn('No file URL found on req.file; saving will use fallback without extension.');
-  }
+      await model.save();
+      
+      const frontendBase = (process.env.FRONTEND_BASE_URL || 'http://localhost:5173').replace(/\/$/, '');
+      const viewLink = `${frontendBase}/view/${model.shortId}`;
 
-  const { infoTL, infoTR, infoBL, infoBR } = req.body;
-
-  const model = new Model({
-    name: req.file.originalname || 'unnamed',
-    url: fileUrl,
-    info: {
-        tl: infoTL || '',
-        tr: infoTR || '',
-        bl: infoBL || '',
-        br: infoBR || ''
-      }
-  });
-  await model.save();
-
-  const frontendBase = (process.env.FRONTEND_BASE_URL || 'http://localhost:5173').replace(/\/$/, '');
-  const viewLink = `${frontendBase}/view/${model.shortId || model._id}`;
-
-  console.log('Upload saved:', { id: model._id, shortId: model.shortId, url: model.url });
-  return res.status(201).json({ success: true, model, viewLink });
-} 
-catch (e) {
-      console.error('Unhandled error in upload handler:', e);
-      return res.status(500).json({ error: 'Server error during upload', message: e.message });
+      return res.status(201).json({ success: true, model, viewLink });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ error: 'Server error' });
     }
   });
 });
 
+// 2. UPDATE STATS ROUTE (Admin)
+app.patch('/api/models/:shortId', checkAdmin, async (req, res) => {
+  try {
+    const { qty, sold, name } = req.body;
+    const updateData = {};
+    if (qty !== undefined) updateData.qty = qty;
+    if (sold !== undefined) updateData.sold = sold;
+    if (name) updateData.name = name;
+
+    const model = await Model.findOneAndUpdate(
+      { shortId: req.params.shortId }, 
+      updateData, 
+      { new: true }
+    );
+    if (!model) return res.status(404).json({ error: 'Not found' });
+    res.json(model);
+  } catch (err) {
+    res.status(500).json({ error: 'Update failed' });
+  }
+});
 app.get('/api/models', async (req, res) => {
   try {
-    // Find all models, sort by newest first
+    // Sort by newest first
     const models = await Model.find().sort({ createdAt: -1 });
     return res.json(models);
   } catch (err) {
@@ -116,30 +120,40 @@ app.get('/api/models', async (req, res) => {
   }
 });
 
-// Get model by shortId and increment views
+// 5. GET SINGLE MODEL (Required for Viewer Page)
 app.get('/api/models/:shortId', async (req, res) => {
   try {
     const shortId = req.params.shortId;
     const model = await Model.findOne({ shortId });
     if (!model) return res.status(404).json({ error: 'Model not found' });
 
-    // increment views atomically
-    model.views = (model.views || 0) + 1;
-    await model.save();
+    // FIX 2: REMOVE AUTO-INCREMENT ON RELOAD
+    // DO NOT add: model.views = model.views + 1; 
+    // This prevents stats from jumping every time you refresh the page.
 
-    // === FIX: INCLUDE 'info' IN THE RESPONSE ===
-    return res.json({ 
-      name: model.name, 
-      url: model.url, 
-      shortId: model.shortId, 
-      views: model.views,
-      info: model.info // <--- This was missing!
-    });
-    // ===========================================
-    
+    return res.json(model);
   } catch (err) {
     console.error('GET /api/models/:shortId error:', err);
     return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 3. LIKE ROUTE (Public)
+app.post('/api/models/:shortId/like', async (req, res) => {
+  try {
+    const { change } = req.body; // Expects { change: 1 } or { change: -1 }
+    const val = change && (change === 1 || change === -1) ? change : 1;
+
+    const model = await Model.findOne({ shortId: req.params.shortId });
+    if (!model) return res.status(404).json({ error: 'Not found' });
+    
+    // Update likes (prevent going below 0)
+    model.likes = Math.max(0, (model.likes || 0) + val);
+    
+    await model.save();
+    res.json({ likes: model.likes });
+  } catch (err) {
+    res.status(500).json({ error: 'Error liking' });
   }
 });
 
