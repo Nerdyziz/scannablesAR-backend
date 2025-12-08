@@ -127,9 +127,10 @@ app.get('/api/models/:shortId', async (req, res) => {
     const model = await Model.findOne({ shortId });
     if (!model) return res.status(404).json({ error: 'Model not found' });
 
-    // FIX 2: REMOVE AUTO-INCREMENT ON RELOAD
-    // DO NOT add: model.views = model.views + 1; 
-    // This prevents stats from jumping every time you refresh the page.
+    // === FIX: INCREMENT VIEWS HERE ===
+    model.views = (model.views || 0) + 1;
+    await model.save();
+    // =================================
 
     return res.json(model);
   } catch (err) {
